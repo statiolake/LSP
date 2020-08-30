@@ -19,43 +19,85 @@ def temporary_setting(settings: sublime.Settings, key: str, val: Any) -> Generat
         settings.set(key, prev_val)
 
 
-class LspApplyWorkspaceEditCommand(sublime_plugin.WindowCommand):
-    def run(self, changes: Optional[Dict[str, List[TextEdit]]] = None) -> None:
-        documents_changed = 0
-        if changes:
-            for path, document_changes in changes.items():
-                self.open_and_apply_edits(path, document_changes)
-                documents_changed += 1
+class _RenameItem:
 
-        if documents_changed > 0:
-            message = 'Applied changes to {} documents'.format(documents_changed)
-            self.window.status_message(message)
-        else:
-            self.window.status_message('No changes to apply to workspace')
+    __slots__ = ("changes", "callback")
 
-    def open_and_apply_edits(self, path: str, file_changes: List[TextEdit]) -> None:
-        view = self.window.open_file(path)
-        if view:
-            if view.is_loading():
-                # TODO: wait for event instead.
-                sublime.set_timeout_async(
-                    lambda: view.run_command('lsp_apply_document_edit', {'changes': file_changes}),
-                    500
-                )
-            else:
-                view.run_command('lsp_apply_document_edit',
-                                 {'changes': file_changes})
-        else:
-            debug('view not found to apply', path, file_changes)
+    def __init__(self, changes: List[TextEdit], callback: Callable[[], None]) -> None:
+        self.changes = changes
+        self.callback = callback
+
+
+class ApplyEditListener(sublime_plugin.EventListener):
+
+    to_be_renamed = {}  # type: Dict[str, _RenameItem]
+
+    def on_load(self, view: sublime.View) -> None:
+        file_name = view.file_name()
+        if file_name:
+            remove_item = None  # type: Optional[str]
+            global to_be_renamed
+            for fn, changes in to_be_renamed.items():
+                if os.path.samefile(file_name, fn):
+                    view.run_command("lsp_apply_document_edit", {"file_name": fn})
+                    break
+
+
+def apply_workspace_edit(
+    window: sublime.Window,
+    changes: Optional[Dict[str, List[TextEdit]]],
+    callback: Callable[[], None]
+) -> None:
+    if not changes:
+        callback()
+        return
+    file_count = len(changes)
+
+    def do_status_message() -> None:
+        if window.is_valid():
+            message = "Applied edits to {} file{}".format(file_count, "" if file_count == 1 else "s")
+            window.status_message(message)
+
+    views = window.views()
+    for view in views:
+        file_name = view.file_name()
+        if file_name:
+            for fn, file_changes in changes.items():
+                if os.path.same_file(file_name, fn):
+                    found = True
+                    view.run_command("lsp_apply_document_edit", file_changes)
+                    changes.pop(fn)
+                    break
+    if changes:
+        global to_be_renamed
+
+        def run_callback_when_empty() -> None:
+            if not to_be_renamed:
+                do_status_message()
+                callback()
+
+        for fn, file_changes in changes.items():
+            to_be_renamed[fn] = _RenameItem(file_changes, run_callback_when_empty)
+        to_be_renamed = changes
+        for fn in changes.keys():
+            window.open_file(fn)
+    else:
+        do_status_message()
 
 
 class LspApplyDocumentEditCommand(sublime_plugin.TextCommand):
 
-    def run(self, edit: Any, changes: Optional[List[TextEdit]] = None) -> None:
+    def run(self, edit: Any, changes: Optional[List[TextEdit]] = None, file_name: Optional[str] = None) -> None:
         # Apply the changes in reverse, so that we don't invalidate the range
         # of any change that we haven't applied yet.
+        rename_item = None  # type: Optional[_RenameItem]
         if not changes:
-            return
+            if isinstance(file_name, str):
+                global to_be_renamed
+                rename_item = to_be_renamed.pop(file_name)
+                changes = rename_item.changes
+            else:
+                return
         with temporary_setting(self.view.settings(), "translate_tabs_to_spaces", False):
             view_version = self.view.change_count()
             last_row, last_col = self.view.rowcol_utf16(self.view.size())
@@ -71,6 +113,8 @@ class LspApplyDocumentEditCommand(sublime_plugin.TextCommand):
                     last_row, last_col = self.view.rowcol(self.view.size())
                 else:
                     self.apply_change(region, replacement, edit)
+        if rename_item:
+            rename_item.callback()
 
     def apply_change(self, region: sublime.Region, replacement: str, edit: Any) -> None:
         if region.empty():

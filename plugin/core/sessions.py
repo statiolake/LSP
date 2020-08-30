@@ -1,3 +1,4 @@
+from ..edit import apply_workspace_edit
 from .collections import DottedDict
 from .edit import parse_workspace_edit
 from .logging import debug
@@ -727,10 +728,10 @@ class Session(Client):
 
     def m_workspace_applyEdit(self, params: Any, request_id: Any) -> None:
         """handles the workspace/applyEdit request"""
-        edit = params.get('edit', {})
-        self.window.run_command('lsp_apply_workspace_edit', {'changes': parse_workspace_edit(edit)})
-        # TODO: We should ideally wait for all changes to have been applied. This is currently not "async".
-        self.send_response(Response(request_id, {"applied": True}))
+        apply_workspace_edit(
+            window=self.window,
+            changes=parse_workspace_edit(params.get('edit', {})),
+            callback=lambda: self.send_response(Response(request_id, {"applied": True})))
 
     def m_textDocument_publishDiagnostics(self, params: Any) -> None:
         """handles the textDocument/publishDiagnostics notification"""

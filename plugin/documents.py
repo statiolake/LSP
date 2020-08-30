@@ -27,6 +27,7 @@ from .core.views import text_document_position_params
 from .core.windows import AbstractViewListener
 from .diagnostics import filter_by_range
 from .diagnostics import view_diagnostics
+from .edit import to_be_renamed
 from .session_buffer import SessionBuffer
 from .session_view import SessionView
 from weakref import WeakSet
