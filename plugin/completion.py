@@ -313,7 +313,7 @@ class CompletionHandler(LSPViewEventListener):
             response_items, response_incomplete = parse_completion_response(response)
             self.response_items = response_items
             self.response_incomplete = response_incomplete
-            self.completions = list(format_completion(item, last_col, settings) for item in self.response_items)
+            self.completions = list(format_completion(item, last_col, settings) for item in self.response_items if item["label"] != "")
 
             # if insert_best_completion was just ran, undo it before presenting new completions.
             prev_char = self.view.substr(self.view.sel()[0].begin() - 1)
